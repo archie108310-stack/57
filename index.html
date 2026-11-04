@@ -1,0 +1,1791 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>互動式課堂分組計分板</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Vue 3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Canvas Confetti for celebration effects -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+            background-color: #f8fafc;
+        }
+        .score-pop {
+            animation: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes pop {
+            0% { transform: scale(0.9); }
+            50% { transform: scale(1.15); }
+            100% { transform: scale(1); }
+        }
+        .crown-bounce {
+            animation: bounce 2s infinite;
+        }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-5px); }
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        [v-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+    <div id="app" class="flex-1 flex flex-col" v-cloak>
+        <!-- Top Navigation Bar -->
+        <header class="bg-indigo-600 text-white shadow-md sticky top-0 z-30">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="bg-white/20 p-2 rounded-xl backdrop-blur-sm">
+                        <i class="fa-solid fa-trophy text-amber-300 text-xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold tracking-tight">課堂分組計分板</h1>
+                        <p class="text-xs text-indigo-200 hidden sm:block">即時加減分、動態自訂按鈕與競賽排行榜</p>
+                    </div>
+                </div>
+
+                <!-- Global Action Controls -->
+                <div class="flex items-center space-x-2 sm:space-x-3">
+                    <!-- Sound Toggle -->
+                    <button @click="soundEnabled = !soundEnabled" 
+                            class="p-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 transition text-sm flex items-center gap-1"
+                            :title="soundEnabled ? '關閉音效' : '開啟音效'">
+                        <i :class="soundEnabled ? 'fa-solid fa-volume-high' : 'fa-solid fa-volume-xmark'" class="w-5 text-center"></i>
+                    </button>
+
+                    <!-- Account & Profile Button -->
+                    <button @click="showAccountModal = true" class="px-3 py-1.5 rounded-lg bg-indigo-700 hover:bg-indigo-800 transition text-sm font-semibold flex items-center gap-1.5 border border-indigo-400/40 text-emerald-300">
+                        <img v-if="userPhoto" :src="userPhoto" class="w-5 h-5 rounded-full border border-white" alt="Avatar">
+                        <i v-else class="fa-solid fa-circle-user text-base"></i>
+                        <span class="hidden md:inline">{{ teacherAccount || '個人帳號' }}</span>
+                    </button>
+
+                    <!-- Class Switch Button -->
+                    <button @click="openClassModal" class="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 transition text-sm font-semibold flex items-center gap-1.5 border border-indigo-400/30">
+                        <i class="fa-solid fa-chalkboard-user text-amber-300"></i>
+                        <span class="hidden sm:inline">{{ currentClassName }}</span>
+                    </button>
+
+                    <!-- Timer Widget Button -->
+                    <button @click="showTimerModal = true" class="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 transition text-sm font-semibold flex items-center gap-1.5">
+                        <i class="fa-solid fa-stopwatch"></i>
+                        <span class="hidden sm:inline">計時器</span>
+                    </button>
+
+                    <!-- Add Group Button -->
+                    <button @click="addGroup" class="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white transition text-sm font-bold flex items-center gap-1.5 shadow-sm">
+                        <i class="fa-solid fa-plus"></i>
+                        <span>新增小組</span>
+                    </button>
+
+                    <!-- Reset Scores -->
+                    <button @click="confirmReset" class="p-2 rounded-lg bg-rose-500 hover:bg-rose-400 transition text-sm text-white" title="重置所有分數">
+                        <i class="fa-solid fa-rotate-right"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full flex flex-col gap-6">
+            <!-- 雲端同步失敗診斷 -->
+            <div v-if="syncStatus === 'error' && lastSyncError" class="flex flex-wrap items-center justify-between gap-3 bg-rose-50 border border-rose-300 text-rose-900 rounded-2xl px-4 py-3">
+                <p class="text-xs sm:text-sm font-semibold leading-relaxed">
+                    <i class="fa-solid fa-triangle-exclamation text-rose-500"></i> {{ lastSyncError }}
+                    <span class="block text-[11px] font-normal text-rose-700 mt-0.5">目前的內容已先備份在這台裝置，連上雲端後會再同步。</span>
+                </p>
+                <div class="flex items-center gap-2">
+                    <button @click="openDiag" class="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 rounded-lg text-xs font-bold text-white transition whitespace-nowrap">
+                        <i class="fa-solid fa-stethoscope"></i> 雲端診斷
+                    </button>
+                    <button @click="retrySync" class="px-3 py-1.5 bg-white hover:bg-rose-100 border border-rose-300 rounded-lg text-xs font-bold text-rose-900 transition whitespace-nowrap">
+                        <i class="fa-solid fa-rotate-right"></i> 重試
+                    </button>
+                </div>
+            </div>
+
+            <!-- 訪客模式警告：沒登入時資料只在這個瀏覽器，可能被清掉 -->
+            <div v-if="!isLoggedIn" class="flex flex-wrap items-center justify-between gap-3 bg-amber-50 border border-amber-300 text-amber-900 rounded-2xl px-4 py-3">
+                <p class="text-xs sm:text-sm font-semibold leading-relaxed">
+                    <i class="fa-solid fa-triangle-exclamation text-amber-500"></i>
+                    目前是<span class="font-extrabold">訪客模式</span>：紀錄只綁在這個瀏覽器，一陣子沒使用或清除瀏覽資料後可能會消失。登入 Google 帳號，紀錄才會永久保存在你的帳號裡。
+                </p>
+                <button @click="loginWithGoogle" class="px-3 py-1.5 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg text-xs font-bold text-amber-900 transition flex items-center gap-1.5 whitespace-nowrap">
+                    <i class="fa-brands fa-google text-[#4285F4]"></i> 登入 Google 保存紀錄
+                </button>
+            </div>
+
+            
+            <div class="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                <div class="flex items-center gap-4">
+                    <div class="text-sm text-slate-500">
+                        目前小組數: <span class="font-bold text-slate-800">{{ groups.length }}</span> 組
+                    </div>
+                    <div class="h-4 w-px bg-slate-200"></div>
+                    <div class="text-sm text-slate-500">
+                        最高分: <span class="font-bold text-emerald-600">{{ highestScore }}</span> 分
+                    </div>
+                    <div class="h-4 w-px bg-slate-200"></div>
+                    <!-- Cloud Sync Status & Storage Mode Indicator -->
+                    <div class="flex items-center gap-2">
+                        <span class="text-[11px] px-2 py-0.5 rounded-md font-bold" :class="usePrivateStorage ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'">
+                            {{ usePrivateStorage ? '帳號私人空間' : '公共共享空間' }}
+                        </span>
+                        <div class="flex items-center gap-1.5 text-xs font-semibold" :class="syncStatusClass">
+                            <i :class="syncStatusIcon"></i>
+                            <span>{{ syncStatusText }}</span>
+                            <button v-if="firebaseReady" @click="openDiag" class="ml-1 text-[11px] underline text-slate-400 hover:text-indigo-600 font-semibold">診斷</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-2">
+                    <button @click="openTopPresetModal" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-200 transition flex items-center gap-1">
+                        <i class="fa-solid fa-pen"></i> 編輯上方按鈕
+                    </button>
+                    <button @click="sortGroups" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition flex items-center gap-1">
+                        <i class="fa-solid fa-arrow-down-9-1"></i> 按分數排序
+                    </button>
+                    <button @click="triggerCelebration" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 transition flex items-center gap-1">
+                        <i class="fa-solid fa-champagne-glasses"></i> 頒獎慶祝
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                <div v-for="(group, index) in groups" :key="group.id" 
+                     class="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col overflow-hidden relative group-card">
+                    
+                    <!-- Top 3 Rank Badge -->
+                    <div v-if="getRank(group) <= 3 && group.score > 0" class="absolute top-3 right-3 z-10">
+                        <span v-if="getRank(group) === 1" class="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-amber-300 shadow-sm crown-bounce">
+                            <i class="fa-solid fa-crown text-amber-500"></i> 第一名
+                        </span>
+                        <span v-else-if="getRank(group) === 2" class="bg-slate-100 text-slate-700 text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-slate-300 shadow-sm">
+                            <i class="fa-solid fa-medal text-slate-400"></i> 第二名
+                        </span>
+                        <span v-else class="bg-orange-100 text-orange-800 text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-orange-300 shadow-sm">
+                            <i class="fa-solid fa-medal text-orange-500"></i> 第三名
+                        </span>
+                    </div>
+
+                    <!-- Card Header (Group Name & Color Accent) -->
+                    <div class="p-3 border-b border-slate-100 flex items-center gap-2" :style="{ borderTop: '5px solid ' + group.color }">
+                        <!-- Group Color Picker -->
+                        <input type="color" v-model="group.color" class="w-7 h-7 rounded-full border-0 cursor-pointer p-0 bg-transparent flex-shrink-0" title="更改組別顏色">
+                        
+                        <!-- Editable Group Name -->
+                        <div class="flex-1 min-w-0">
+                            <input type="text" v-model="group.name" class="font-bold text-base text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-500 focus:bg-slate-50 focus:outline-none px-1 py-0.5 rounded w-full truncate transition">
+                        </div>
+
+                        <!-- Card Delete Button -->
+                        <button @click="deleteGroup(group.id)" class="text-slate-300 hover:text-rose-500 transition p-1" title="刪除此組">
+                            <i class="fa-solid fa-trash-can text-xs"></i>
+                        </button>
+                    </div>
+
+                    <!-- Card Body (Big Score Display) -->
+                    <div class="p-4 flex-1 flex flex-col items-center justify-center bg-slate-50/50">
+                        <div class="text-4xl sm:text-5xl font-extrabold tracking-tight my-2 font-mono" :class="group.score >= 0 ? 'text-indigo-600' : 'text-rose-500'">
+                            {{ group.score }}
+                        </div>
+                        <p class="text-xs text-slate-400">分</p>
+                    </div>
+
+                    <!-- Quick Action Buttons for THIS specific group -->
+                    <div class="p-2.5 bg-white border-t border-slate-100 space-y-2">
+                        <!-- Main Preset Buttons (可用上方工具列的「編輯上方按鈕」修改) -->
+                        <div class="grid grid-cols-2 gap-1">
+                            <button v-for="(tp, ti) in topPresets" :key="ti"
+                                    @click="tp.custom ? openCustomScoreModal(group, tp.points, tp.label + '加分') : addPoints(group, tp.points, tp.label)"
+                                    :class="topPresetColor(ti)"
+                                    :title="tp.custom ? '點擊自訂' + tp.label + '得分' : topPresetText(tp)"
+                                    class="py-1.5 px-1 rounded-lg font-semibold text-[11px] transition flex items-center justify-center gap-1 border active:scale-95">
+                                <span class="truncate">{{ topPresetText(tp) }}</span>
+                            </button>
+                        </div>
+
+                        <!-- Direct +/- 1 Quick Controls & Custom Modal Trigger -->
+                        <div class="flex items-center gap-1.5 pt-0.5">
+                            <button @click="addPoints(group, -1, '微調扣分')" class="flex-1 py-1 rounded-lg bg-slate-100 hover:bg-rose-100 hover:text-rose-700 text-slate-600 text-xs font-bold transition active:scale-95">
+                                -1
+                            </button>
+                            <button @click="addPoints(group, 1, '微調加分')" class="flex-1 py-1 rounded-lg bg-slate-100 hover:bg-emerald-100 hover:text-emerald-700 text-slate-600 text-xs font-bold transition active:scale-95">
+                                +1
+                            </button>
+                            <button @click="openCustomScoreModal(group)" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium transition" title="輸入任意分數事由">
+                                <i class="fa-solid fa-sliders"></i> 自訂
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <section class="mt-4 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                <div class="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
+                    <div>
+                        <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-bolt text-amber-500"></i> 底下快捷加分區 (隨時自訂)
+                        </h2>
+                        <p class="text-xs text-slate-500 mt-0.5">點擊快捷按鈕直接幫「指定小組」加扣分，可自由新增/編輯您專屬的得分項目</p>
+                    </div>
+
+                    <!-- Add Custom Preset Button -->
+                    <button @click="openAddPresetModal" class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-bold rounded-lg transition flex items-center gap-1 border border-indigo-200">
+                        <i class="fa-solid fa-plus"></i> 新增自訂按鈕
+                    </button>
+                </div>
+
+                <!-- Custom Quick Buttons Row -->
+                <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                    <div v-for="(preset, idx) in customPresets" :key="idx" 
+                         class="group relative bg-slate-50 hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-200 rounded-xl p-3 transition flex flex-col justify-between">
+                        
+                        <div class="flex items-start justify-between">
+                            <span class="text-xs font-bold text-slate-700 truncate pr-2">{{ preset.label }}</span>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                <button @click.stop="openEditPresetModal(idx)" title="編輯" class="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 text-slate-400 hover:text-indigo-600 text-xs transition">
+                                    <i class="fa-solid fa-pen"></i>
+                                </button>
+                                <button @click.stop="deletePreset(idx)" title="刪除" class="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 text-slate-400 hover:text-rose-500 text-xs transition">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="mt-2 flex items-center justify-between">
+                            <span class="text-sm font-extrabold" :class="preset.points >= 0 ? 'text-emerald-600' : 'text-rose-500'">
+                                {{ preset.points >= 0 ? '+' + preset.points : preset.points }}分
+                            </span>
+
+                            <button @click="applyPresetToTarget(preset)" class="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-semibold shadow-sm transition">
+                                給分
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+                    <h3 class="text-sm font-bold text-slate-800 flex items-center gap-2">
+                        <i class="fa-solid fa-clock-rotate-left text-slate-500"></i> 加扣分紀錄與履歷
+                    </h3>
+                    <button v-if="logs.length > 0" @click="clearLogs" class="text-xs text-slate-400 hover:text-rose-500 transition">
+                        清空紀錄
+                    </button>
+                </div>
+
+                <div v-if="logs.length === 0" class="text-center py-6 text-xs text-slate-400">
+                    尚無任何得分紀錄
+                </div>
+
+                <div v-else class="max-h-40 overflow-y-auto space-y-2 pr-1">
+                    <div v-for="(log, i) in logs" :key="i" class="flex items-center justify-between text-xs py-1.5 px-3 bg-slate-50 rounded-lg">
+                        <div class="flex items-center gap-2">
+                            <span class="text-slate-400 font-mono">{{ log.time }}</span>
+                            <span class="font-bold text-slate-700">{{ log.groupName }}</span>
+                            <span class="text-slate-500">({{ log.reason }})</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span :class="log.points >= 0 ? 'text-emerald-600 font-bold' : 'text-rose-500 font-bold'">
+                                {{ log.points >= 0 ? '+' + log.points : log.points }}
+                            </span>
+                            <button @click="undoLog(log, i)" class="text-slate-400 hover:text-indigo-600 transition" title="復原此操作">
+                                <i class="fa-solid fa-rotate-left"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <div v-if="showCustomScoreModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-bold text-slate-800">
+                        加扣分設定 - <span class="text-indigo-600">{{ targetGroup?.name }}</span>
+                    </h3>
+                    <button @click="showCustomScoreModal = false" class="text-slate-400 hover:text-slate-600">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1.5">點選常用分數晶片</label>
+                        <div class="flex flex-wrap gap-1.5 mb-3">
+                            <button v-for="quickVal in [5, 10, 15, 20, 30, 50, 100]" :key="quickVal"
+                                    @click="customScoreValue = quickVal"
+                                    :class="customScoreValue === quickVal ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+                                    class="px-2.5 py-1 rounded-lg text-xs font-bold transition">
+                                +{{ quickVal }}
+                            </button>
+                        </div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">自訂分數 (正數為加分，負數為扣分)</label>
+                        <input type="number" v-model.number="customScoreValue" class="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none text-lg font-bold">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">加扣分原因 / 項目說明</label>
+                        <input type="text" v-model="customScoreReason" placeholder="例如：大卷表現優異、簡報優秀" class="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm">
+                    </div>
+
+                    <div class="flex gap-2 pt-2">
+                        <button @click="showCustomScoreModal = false" class="flex-1 py-2 rounded-xl border border-slate-300 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition">
+                            取消
+                        </button>
+                        <button @click="submitCustomScore" class="flex-1 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition shadow-md">
+                            確認給分
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showTopPresetModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+                <div class="flex items-center justify-between mb-1">
+                    <h3 class="text-lg font-bold text-slate-800">編輯上方加分按鈕</h3>
+                    <button @click="showTopPresetModal = false" class="text-slate-400 hover:text-slate-600">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-500 mb-3">這些按鈕會出現在每個小組卡片上。勾選「自訂」代表按下去時由你輸入分數（像大卷）。</p>
+
+                <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    <div v-for="(d, i) in topPresetsDraft" :key="i" class="flex items-center gap-1.5 p-2 rounded-xl border border-slate-200 bg-slate-50/60">
+                        <input type="text" v-model="d.label" placeholder="名稱" maxlength="12"
+                               class="flex-1 min-w-0 px-2 py-1.5 text-xs border border-slate-300 rounded-lg font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                        <input type="number" v-model.number="d.points" placeholder="分數"
+                               class="w-16 px-2 py-1.5 text-xs text-center border border-slate-300 rounded-lg font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                        <label class="flex items-center gap-1 text-[11px] font-semibold text-slate-600 whitespace-nowrap cursor-pointer">
+                            <input type="checkbox" v-model="d.custom" class="text-indigo-600"> 自訂
+                        </label>
+                        <button @click="removeTopPresetDraft(i)" title="刪除" class="text-slate-400 hover:text-rose-500 px-1">
+                            <i class="fa-solid fa-trash text-xs"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between mt-3">
+                    <button @click="addTopPresetDraft" :disabled="topPresetsDraft.length >= 8"
+                            class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 text-indigo-600 text-xs font-bold rounded-lg transition border border-indigo-200">
+                        <i class="fa-solid fa-plus"></i> 新增按鈕
+                    </button>
+                    <button @click="resetTopPresetsDraft" class="text-[11px] text-slate-500 hover:text-slate-700 hover:underline font-semibold">恢復預設</button>
+                </div>
+
+                <div class="pt-4 flex gap-2">
+                    <button @click="showTopPresetModal = false" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition">取消</button>
+                    <button @click="saveTopPresets" class="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition shadow-md">儲存</button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showAddPresetModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-bold text-slate-800">{{ editingPresetIdx === null ? '新增快捷項目按鈕' : '編輯快捷項目按鈕' }}</h3>
+                    <button @click="showAddPresetModal = false" class="text-slate-400 hover:text-slate-600">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">按鈕名稱</label>
+                        <input type="text" v-model="newPresetLabel" placeholder="例如：小組討論、熱心協助" class="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">得分分值 (如 +3 或 -2)</label>
+                        <input type="number" v-model.number="newPresetPoints" class="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none text-lg font-bold">
+                    </div>
+
+                    <div class="flex gap-2 pt-2">
+                        <button @click="showAddPresetModal = false" class="flex-1 py-2 rounded-xl border border-slate-300 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition">
+                            取消
+                        </button>
+                        <button @click="saveNewPreset" class="flex-1 py-2 rounded-xl bg-emerald-600 text-white font-semibold text-sm hover:bg-emerald-700 transition shadow-md">
+                            {{ editingPresetIdx === null ? '新增至快捷區' : '儲存修改' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showTargetSelectModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+                <div class="flex items-center justify-between mb-3">
+                    <div>
+                        <h3 class="text-lg font-bold text-slate-800">請選擇給分小組</h3>
+                        <p class="text-xs text-indigo-600 font-semibold mt-0.5">
+                            項目：{{ selectedPresetForTarget?.label }} ({{ selectedPresetForTarget?.points >= 0 ? '+' : '' }}{{ selectedPresetForTarget?.points }}分)
+                        </p>
+                    </div>
+                    <button @click="showTargetSelectModal = false" class="text-slate-400 hover:text-slate-600">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 my-4 max-h-60 overflow-y-auto p-1">
+                    <button v-for="group in groups" :key="group.id" 
+                            @click="confirmApplyPreset(group)" 
+                            class="p-3 rounded-xl border border-slate-200 hover:border-indigo-500 hover:bg-indigo-50 transition text-left flex items-center justify-between group">
+                        <span class="font-bold text-slate-800 text-sm group-hover:text-indigo-600">{{ group.name }}</span>
+                        <span class="text-xs text-slate-400 font-mono">{{ group.score }}分</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showClassModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <i class="fa-solid fa-chalkboard-user text-indigo-600"></i> 切換班級
+                    </h3>
+                    <button @click="showClassModal = false" class="text-slate-400 hover:text-slate-600">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <p class="text-xs text-slate-500">同一個帳號可以儲存多個班級，各班的小組、分數和紀錄互不影響。</p>
+
+                    <!-- Class List -->
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 mb-1">我的班級</label>
+                        <div class="max-h-48 overflow-y-auto space-y-1.5 p-1 border border-slate-200 rounded-xl bg-slate-50/50">
+                            <div v-for="name in classList" :key="name"
+                                 class="w-full flex items-center justify-between p-2.5 rounded-lg border transition"
+                                 :class="name === currentClassName ? 'bg-indigo-50 border-indigo-400' : 'bg-white border-slate-200 hover:border-indigo-400'">
+                                <button @click="switchClass(name)" class="flex-1 flex items-center justify-between text-left min-w-0">
+                                    <span class="text-xs font-bold text-slate-700 truncate">{{ name }}</span>
+                                    <span v-if="name === currentClassName" class="text-[10px] font-bold text-indigo-600 shrink-0 ml-2">目前使用中</span>
+                                    <span v-else class="text-[10px] font-semibold text-indigo-500 shrink-0 ml-2">切換</span>
+                                </button>
+                                <button @click="renameClass(name)" title="更改班級名稱" class="ml-2 w-6 h-6 shrink-0 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-100 rounded transition">
+                                    <i class="fa-solid fa-pen text-[11px]"></i>
+                                </button>
+                                <button @click="deleteClass(name)" title="刪除班級" class="ml-1 w-6 h-6 shrink-0 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded transition">
+                                    <i class="fa-solid fa-trash text-[11px]"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Create New Class -->
+                    <div class="pt-2 border-t border-slate-100">
+                        <label class="block text-xs font-bold text-slate-600 mb-2">新增一個班級</label>
+                        <div class="flex gap-2">
+                            <input type="text" v-model="newClassNameInput" @keyup.enter="createNewClass" placeholder="例如：四年三班"
+                                   class="flex-1 px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none font-semibold">
+                            <button @click="createNewClass" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition whitespace-nowrap">
+                                <i class="fa-solid fa-plus"></i> 建立
+                            </button>
+                        </div>
+                        <p v-if="!isLoggedIn" class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2 leading-relaxed">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                            目前尚未用 Google 帳號登入，班級清單只會保存在這台裝置的瀏覽器中。登入後可在任何裝置看到同一帳號下的所有班級。
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showTimerModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 text-center">
+                <div class="flex items-center justify-between mb-2">
+                    <h3 class="text-base font-bold text-slate-800">課堂倒數計時器</h3>
+                    <button @click="showTimerModal = false" class="text-slate-400 hover:text-slate-600">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+
+                <div class="text-6xl font-extrabold font-mono text-indigo-600 my-6 tracking-wider">
+                    {{ formattedTimerTime }}
+                </div>
+
+                <div class="flex justify-center flex-wrap gap-2 mb-3">
+                    <button @click="setTimerPreset(60)" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded text-xs font-bold text-slate-600">1 分鐘</button>
+                    <button @click="setTimerPreset(180)" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded text-xs font-bold text-slate-600">3 分鐘</button>
+                    <button @click="setTimerPreset(300)" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded text-xs font-bold text-slate-600">5 分鐘</button>
+                    <button @click="setTimerPreset(600)" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded text-xs font-bold text-slate-600">10 分鐘</button>
+                    <button @click="showCustomTimerInput = !showCustomTimerInput" class="px-2.5 py-1 rounded text-xs font-bold transition"
+                            :class="showCustomTimerInput ? 'bg-indigo-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'">自訂</button>
+                </div>
+
+                <div v-if="showCustomTimerInput" class="flex items-center justify-center gap-1.5 mb-4">
+                    <input type="number" min="0" max="999" v-model.number="customTimerMinutes"
+                           class="w-14 px-2 py-1.5 text-center text-sm border border-slate-300 rounded-lg font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                    <span class="text-xs text-slate-500 font-semibold">分</span>
+                    <input type="number" min="0" max="59" v-model.number="customTimerSeconds"
+                           class="w-14 px-2 py-1.5 text-center text-sm border border-slate-300 rounded-lg font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                    <span class="text-xs text-slate-500 font-semibold">秒</span>
+                    <button @click="applyCustomTimer" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition whitespace-nowrap">
+                        套用
+                    </button>
+                </div>
+
+                <div class="flex gap-2">
+                    <button @click="toggleTimer" class="flex-1 py-2.5 rounded-xl font-bold text-sm text-white shadow-sm transition"
+                            :class="isTimerRunning ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-600 hover:bg-indigo-700'">
+                        {{ isTimerRunning ? '暫停' : '開始計時' }}
+                    </button>
+                    <button @click="resetTimer" class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-sm font-bold transition">
+                        重置
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showDiagModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-bold text-slate-800 flex items-center gap-2"><i class="fa-solid fa-stethoscope text-rose-500"></i> 雲端診斷</h3>
+                    <button @click="showDiagModal = false" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-lg"></i></button>
+                </div>
+
+                <div v-if="isDiagRunning" class="text-xs text-slate-500 font-semibold py-2"><i class="fa-solid fa-arrows-rotate animate-spin"></i> 檢查中，最多約 20 秒…</div>
+
+                <div class="space-y-2">
+                    <div v-for="(r, i) in diagResults" :key="i" class="flex items-start gap-2 p-2.5 rounded-xl border text-xs"
+                         :class="r.ok === true ? 'bg-emerald-50 border-emerald-200' : (r.ok === false ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200')">
+                        <i :class="r.ok === true ? 'fa-solid fa-circle-check text-emerald-500' : (r.ok === false ? 'fa-solid fa-circle-xmark text-rose-500' : 'fa-solid fa-circle-info text-slate-400')" class="mt-0.5"></i>
+                        <div class="min-w-0">
+                            <div class="font-bold text-slate-800">{{ r.label }}</div>
+                            <div class="text-slate-600 break-words leading-relaxed">{{ r.detail }}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4 pt-3 border-t border-slate-100">
+                    <p class="text-[11px] font-bold text-slate-600 mb-1.5">到 Firebase 主控台檢查（專案：{{ diagLinks.projectId }}）</p>
+                    <div class="flex flex-col gap-1.5">
+                        <a :href="diagLinks.firestore" target="_blank" rel="noopener" class="text-xs text-indigo-600 hover:underline font-semibold"><i class="fa-solid fa-arrow-up-right-from-square"></i> Firestore Database（沒有資料庫就按「建立資料庫」）</a>
+                        <a :href="diagLinks.rules" target="_blank" rel="noopener" class="text-xs text-indigo-600 hover:underline font-semibold"><i class="fa-solid fa-arrow-up-right-from-square"></i> Firestore 規則（確認沒有過期）</a>
+                        <a :href="diagLinks.auth" target="_blank" rel="noopener" class="text-xs text-indigo-600 hover:underline font-semibold"><i class="fa-solid fa-arrow-up-right-from-square"></i> 已授權網域（要有目前網址的網域）</a>
+                    </div>
+                </div>
+
+                <div class="pt-4 flex gap-2">
+                    <button @click="runDiagnostics" :disabled="isDiagRunning" class="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-bold rounded-xl text-sm transition shadow-md">重新檢查</button>
+                    <button @click="showDiagModal = false" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition">關閉</button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showAccountModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <i class="fa-solid fa-user-shield text-indigo-600"></i> 個人帳號紀錄設定
+                    </h3>
+                    <button @click="showAccountModal = false" class="text-slate-400 hover:text-slate-600">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <!-- Google Account / Fast Email Login Section -->
+                    <div class="bg-indigo-50/80 p-4 rounded-xl border border-indigo-100 flex flex-col items-center gap-3 text-center">
+                        <div v-if="isLoggedIn" class="flex flex-col items-center gap-2 w-full">
+                            <img v-if="userPhoto" :src="userPhoto" class="w-12 h-12 rounded-full border-2 border-indigo-200 shadow-sm" alt="Avatar">
+                            <div v-else class="w-12 h-12 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+                                <i class="fa-solid fa-user"></i>
+                            </div>
+                            <div>
+                                <div class="font-bold text-slate-800 text-sm">{{ userDisplayName }}</div>
+                                <div class="text-xs text-slate-500">{{ userEmail }}</div>
+                            </div>
+                            <span class="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold">
+                                <i class="fa-solid fa-cloud-check text-xs"></i> 已綁定專屬雲端紀錄
+                            </span>
+                            <button @click="logoutAccount" class="mt-1 text-xs text-rose-600 hover:underline font-semibold">
+                                切換 / 登出目前帳號
+                            </button>
+                        </div>
+
+                        <div v-else class="w-full flex flex-col items-center gap-3">
+                            <p class="text-xs text-slate-600">使用 Google 帳號登入，即可把加扣分紀錄安全地存到你專屬的雲端空間，換裝置、換瀏覽器都能繼續使用。</p>
+
+                            <!-- Real Google Sign-In Button -->
+                            <button @click="loginWithGoogle" class="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-sm font-bold text-slate-700 shadow-sm transition">
+                                <i class="fa-brands fa-google text-base text-[#4285F4]"></i>
+                                使用 Google 帳號登入
+                            </button>
+
+                            <p v-if="!firebaseReady" class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 text-left leading-relaxed">
+                                <i class="fa-solid fa-triangle-exclamation"></i>
+                                尚未設定 Firebase 專案，目前只能把紀錄保存在「這台裝置的瀏覽器」中。請依照程式碼開頭的註解完成免費設定，即可啟用 Google 帳號雲端同步。
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Teacher Account Identifier -->
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 mb-1">教師 / 使用者顯示名稱</label>
+                        <input type="text" v-model="teacherAccount" placeholder="例如：王老師" 
+                               class="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm font-semibold">
+                    </div>
+
+                    <!-- Complete User ID Display -->
+                    <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                        <div class="text-[11px] font-bold text-slate-500 mb-1 uppercase tracking-wider">您的系統專屬 User ID (完整)</div>
+                        <div class="text-xs font-mono text-slate-700 break-all select-all bg-white p-2 rounded border border-slate-200">
+                            {{ userId || '載入中...' }}
+                        </div>
+                    </div>
+
+                    <!-- Storage Mode Switch -->
+                    <div class="bg-indigo-50/60 p-3.5 rounded-xl border border-indigo-100 space-y-2">
+                        <label class="block text-xs font-bold text-indigo-900">紀錄儲存模式</label>
+                        
+                        <label class="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-white/60 transition">
+                            <input type="radio" :value="true" v-model="usePrivateStorage" class="mt-0.5 text-indigo-600">
+                            <div>
+                                <div class="text-xs font-bold text-slate-800">個人帳號專屬空間 (建議)</div>
+                                <div class="text-[11px] text-slate-500">資料獨立儲存，跨裝置不受其他人影響</div>
+                            </div>
+                        </label>
+
+                        <label class="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-white/60 transition">
+                            <input type="radio" :value="false" v-model="usePrivateStorage" class="mt-0.5 text-indigo-600">
+                            <div>
+                                <div class="text-xs font-bold text-slate-800">公共共享空間</div>
+                                <div class="text-[11px] text-slate-500">適合跨班級或多位老師共同使用的公共儲存區</div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class="pt-2 flex justify-end gap-2">
+                        <button @click="saveAccountSettings" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition shadow-md">
+                            儲存並套用帳號設定
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithPopup, GoogleAuthProvider, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, initializeFirestore, doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const { createApp, ref, computed, watch, onMounted } = Vue;
+
+        // ====================================================================
+        // Firebase 專案設定 —— 請填入「你自己」的 Firebase 專案資訊，才能啟用
+        // 「用 Google 帳號登入 + 雲端存檔」。步驟（全部免費）：
+        //   1. 開啟 https://console.firebase.google.com 建立一個新專案
+        //   2. 專案總覽 → 齒輪圖示「專案設定」→ 新增一個「網頁應用程式」
+        //      複製那裡出現的 firebaseConfig 物件，取代下面這組
+        //   3. 左側選單「Authentication」→「Sign-in method」→ 啟用「Google」
+        //   4. 左側選單「Firestore Database」→「建立資料庫」（先選測試模式即可）
+        // 在完成設定之前，這個網頁會自動改用「這台裝置的瀏覽器」暫存資料，
+        // 不會出現 Google 登入視窗，資料也不會跨裝置同步。
+        // ====================================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyCEj1xnud0nt7gt8-IcG22Vb2i_WGfXZtM",
+            authDomain: "archie-99354.firebaseapp.com",
+            projectId: "archie-99354",
+            storageBucket: "archie-99354.firebasestorage.app",
+            messagingSenderId: "50314267399",
+            appId: "1:50314267399:web:35526161c4f6dd8d2053a2"
+        };
+
+        const isFirebaseConfigured = !!(firebaseConfig.apiKey && firebaseConfig.apiKey !== 'YOUR_API_KEY');
+        const appId = firebaseConfig.projectId || 'classroom-scoreboard';
+
+        let db = null;
+        let auth = null;
+        let googleProvider = null;
+        let currentUser = null;
+
+        if (isFirebaseConfigured) {
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                // 自動偵測並在需要時改用 long-polling，改善部分網路/代理環境連不上 Firestore 的問題
+                db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+                googleProvider = new GoogleAuthProvider();
+            } catch (e) {
+                console.warn("Firebase 初始化失敗:", e);
+            }
+        } else {
+            console.warn("尚未設定 Firebase：目前僅會將紀錄保存在這台裝置的瀏覽器中，Google 帳號登入功能暫時無法使用。");
+        }
+
+        createApp({
+            setup() {
+                // Group Colors Palette
+                const defaultColors = ['#4f46e5', '#059669', '#d97706', '#dc2626', '#0284c7', '#7c3aed', '#db2777', '#0891b2'];
+
+                // Account & Profile State
+                const isLoggedIn = ref(false);
+                const userDisplayName = ref('王老師');
+                const userEmail = ref('');
+                const userPhoto = ref('');
+                const firebaseReady = ref(isFirebaseConfigured);
+
+                // Cloud & Save States
+                const currentClassName = ref('三年一班');
+                const teacherAccount = ref('王老師');
+                const userId = ref('user_default');
+                const usePrivateStorage = ref(true);
+                const showAccountModal = ref(false);
+                const showClassModal = ref(false);
+                const classList = ref([]);
+                const newClassNameInput = ref('');
+                const syncStatus = ref('synced'); // 'synced' | 'saving' | 'error'
+
+                // Initial State with 5 default groups
+                const groups = ref([
+                    { id: 1, name: '第一組', score: 0, color: '#4f46e5' },
+                    { id: 2, name: '第二組', score: 0, color: '#059669' },
+                    { id: 3, name: '第三組', score: 0, color: '#d97706' },
+                    { id: 4, name: '第四組', score: 0, color: '#dc2626' },
+                    { id: 5, name: '第五組', score: 0, color: '#0284c7' }
+                ]);
+
+                // Bottom Custom Presets
+                const customPresets = ref([
+                    { label: '回答', points: 5 },
+                    { label: '大卷加分', points: 10 },
+                    { label: '考試', points: 10 },
+                    { label: '功課', points: 10 },
+                    { label: '小組互動', points: 3 },
+                    { label: '秩序良好', points: 2 },
+                    { label: '課堂違規', points: -2 }
+                ]);
+
+                // Action History Logs & Audio
+                const logs = ref([]);
+                const soundEnabled = ref(true);
+
+                // 小組卡片上方的固定加分按鈕（可編輯，存在帳號設定）
+                const topPresets = ref([
+                    { label: '回答', points: 5, custom: false },
+                    { label: '大卷', points: 10, custom: true },
+                    { label: '考試', points: 10, custom: false },
+                    { label: '功課', points: 10, custom: false }
+                ]);
+                const DEFAULT_TOP_PRESETS = JSON.parse(JSON.stringify(topPresets.value));
+                const topPresetColors = [
+                    'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-100',
+                    'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-100',
+                    'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-100',
+                    'bg-sky-50 hover:bg-sky-100 text-sky-700 border-sky-100',
+                    'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-100',
+                    'bg-violet-50 hover:bg-violet-100 text-violet-700 border-violet-100',
+                    'bg-teal-50 hover:bg-teal-100 text-teal-700 border-teal-100',
+                    'bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-100'
+                ];
+                const topPresetColor = (i) => topPresetColors[i % topPresetColors.length];
+                const topPresetText = (tp) => tp.custom
+                    ? `${tp.label}(自訂)`
+                    : `${tp.label} ${tp.points > 0 ? '+' : ''}${tp.points}`;
+
+                const showTopPresetModal = ref(false);
+                const topPresetsDraft = ref([]);
+                const openTopPresetModal = () => {
+                    topPresetsDraft.value = JSON.parse(JSON.stringify(topPresets.value));
+                    showTopPresetModal.value = true;
+                };
+                const addTopPresetDraft = () => {
+                    if (topPresetsDraft.value.length >= 8) return;
+                    topPresetsDraft.value.push({ label: '', points: 5, custom: false });
+                };
+                const removeTopPresetDraft = (i) => { topPresetsDraft.value.splice(i, 1); };
+                const resetTopPresetsDraft = () => {
+                    topPresetsDraft.value = JSON.parse(JSON.stringify(DEFAULT_TOP_PRESETS));
+                };
+                const saveTopPresets = () => {
+                    const cleaned = topPresetsDraft.value
+                        .map(d => ({ label: String(d.label || '').trim(), points: Number(d.points) || 0, custom: !!d.custom }))
+                        .filter(d => d.label);
+                    if (cleaned.length === 0) {
+                        alert('至少要保留一個按鈕，名稱不能是空的。');
+                        return;
+                    }
+                    topPresets.value = cleaned;
+                    showTopPresetModal.value = false;
+                };
+
+                // 預設值備份（登出時用來清掉前一個帳號的自訂內容）
+                const DEFAULT_GROUPS = JSON.parse(JSON.stringify(groups.value));
+                const DEFAULT_PRESETS = JSON.parse(JSON.stringify(customPresets.value));
+
+                // Modals Controls
+                const showCustomScoreModal = ref(false);
+                const targetGroup = ref(null);
+                const customScoreValue = ref(10);
+                const customScoreReason = ref('');
+
+                const showAddPresetModal = ref(false);
+                const newPresetLabel = ref('');
+                const newPresetPoints = ref(1);
+                const editingPresetIdx = ref(null);
+
+                const showTargetSelectModal = ref(false);
+                const selectedPresetForTarget = ref(null);
+
+                // Timer Controls
+                const showTimerModal = ref(false);
+                const timerSeconds = ref(180);
+                const showCustomTimerInput = ref(false);
+                const customTimerMinutes = ref(10);
+                const customTimerSeconds = ref(0);
+                const isTimerRunning = ref(false);
+                let timerInterval = null;
+                let unsubscribeDocListener = null;
+                let isRemoteUpdating = false;
+                let unsubscribeSettingsListener = null;
+                let isRemoteSettingsUpdating = false;
+                let settingsReady = false;        // 帳號設定載入完成前不寫回雲端，避免用預設值覆蓋掉雲端資料
+                let accountSettingsExist = false; // 帳號設定存在後，班級文件裡舊的快捷項目/老師名稱就不再套用
+
+                // Sound Effect Generator
+                // 共用同一個 AudioContext，並在使用者第一次點擊畫面時解鎖。
+                // （之前每次播音效都 new 一個新的 AudioContext，瀏覽器會把它卡在
+                // "suspended" 狀態、尤其是在 await 之後呼叫時，導致永遠發不出聲音。）
+                let sharedAudioCtx = null;
+                const getAudioCtx = () => {
+                    if (!sharedAudioCtx) {
+                        sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    if (sharedAudioCtx.state === 'suspended') {
+                        sharedAudioCtx.resume().catch(() => {});
+                    }
+                    return sharedAudioCtx;
+                };
+
+                const playBeep = (freq = 600, type = 'sine', duration = 0.15) => {
+                    if (!soundEnabled.value) return;
+                    try {
+                        const ctx = getAudioCtx();
+                        const osc = ctx.createOscillator();
+                        const gain = ctx.createGain();
+                        osc.type = type;
+                        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+                        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+                        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+                        osc.connect(gain);
+                        gain.connect(ctx.destination);
+                        osc.start();
+                        osc.stop(ctx.currentTime + duration);
+                    } catch (e) {}
+                };
+
+                const highestScore = computed(() => {
+                    if (groups.value.length === 0) return 0;
+                    return Math.max(...groups.value.map(g => g.score), 0);
+                });
+
+                // 名次：比自己分數高的組數 + 1（同分並列同名次）
+                const getRank = (group) => {
+                    return groups.value.filter(g => g.score > group.score).length + 1;
+                };
+
+                const formattedTimerTime = computed(() => {
+                    const m = Math.floor(timerSeconds.value / 60);
+                    const s = timerSeconds.value % 60;
+                    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+                });
+
+                const syncStatusText = computed(() => {
+                    if (!firebaseReady.value) return '本機瀏覽器儲存';
+                    if (syncStatus.value === 'saving') return '雲端同步中...';
+                    if (syncStatus.value === 'error') return '同步失敗';
+                    return '雲端已同步';
+                });
+
+                const syncStatusIcon = computed(() => {
+                    if (!firebaseReady.value) return 'fa-solid fa-hard-drive text-slate-500';
+                    if (syncStatus.value === 'saving') return 'fa-solid fa-arrows-rotate animate-spin text-amber-500';
+                    if (syncStatus.value === 'error') return 'fa-solid fa-triangle-exclamation text-rose-500';
+                    return 'fa-solid fa-cloud-check text-emerald-500';
+                });
+
+                const syncStatusClass = computed(() => {
+                    if (!firebaseReady.value) return 'text-slate-500';
+                    if (syncStatus.value === 'saving') return 'text-amber-600';
+                    if (syncStatus.value === 'error') return 'text-rose-600';
+                    return 'text-emerald-600';
+                });
+
+                // Authentication setup — 尚未用 Google 登入前，先用匿名登入讓 Firestore 規則能運作
+                const ensureAuth = async () => {
+                    if (!auth) return null;
+                    if (currentUser) return currentUser;
+
+                    try {
+                        const res = await signInAnonymously(auth);
+                        currentUser = res.user;
+                    } catch (err) {
+                        console.warn('匿名登入失敗:', err);
+                    }
+                    if (currentUser && !isLoggedIn.value) {
+                        userId.value = currentUser.uid;
+                    }
+                    return currentUser;
+                };
+
+                // Get Firestore Doc Reference according to strict path rules
+                const getDocRef = (className) => {
+                    if (!db || !currentUser) return null;
+                    const safeClassName = className || 'default';
+                    if (usePrivateStorage.value) {
+                        // Rule 1: /artifacts/{appId}/users/{userId}/{collectionName}
+                        return doc(db, 'artifacts', appId, 'users', currentUser.uid, 'classes', safeClassName);
+                    } else {
+                        // Rule 1: /artifacts/{appId}/public/data/{collectionName}
+                        return doc(db, 'artifacts', appId, 'public', 'data', 'classes', safeClassName);
+                    }
+                };
+
+                // 記住這台裝置看過的班級清單（Firebase 未設定、或作為本機快取時使用）
+                const rememberClassLocally = (name) => {
+                    const uidKey = currentUser ? currentUser.uid : 'guest';
+                    const storeKey = `scoreboard_classlist_${uidKey}`;
+                    try {
+                        const raw = localStorage.getItem(storeKey);
+                        let list = raw ? JSON.parse(raw) : [];
+                        if (!list.includes(name)) {
+                            list.push(name);
+                            localStorage.setItem(storeKey, JSON.stringify(list));
+                        }
+                    } catch (e) {}
+                };
+
+                // 取得目前帳號底下所有已建立的班級
+                const fetchClassList = async () => {
+                    const uidKey = currentUser ? currentUser.uid : 'guest';
+                    if (db && currentUser) {
+                        try {
+                            const colRef = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'classes');
+                            const snap = await getDocs(colRef);
+                            const list = [];
+                            snap.forEach(d => list.push(d.id));
+                            if (!list.includes(currentClassName.value)) list.push(currentClassName.value);
+                            classList.value = list.sort();
+                            return;
+                        } catch (e) {
+                            console.warn('讀取班級清單失敗，改用本機紀錄:', e);
+                        }
+                    }
+                    try {
+                        const raw = localStorage.getItem(`scoreboard_classlist_${uidKey}`);
+                        let list = raw ? JSON.parse(raw) : [];
+                        if (!list.includes(currentClassName.value)) list.push(currentClassName.value);
+                        classList.value = list.sort();
+                    } catch (e) {
+                        classList.value = [currentClassName.value];
+                    }
+                };
+
+                const openClassModal = async () => {
+                    showClassModal.value = true;
+                    await fetchClassList();
+                };
+
+                const switchClass = async (name) => {
+                    if (name === currentClassName.value) {
+                        showClassModal.value = false;
+                        return;
+                    }
+                    currentClassName.value = name;
+                    await listenToCloudClass(name);
+                    rememberClassLocally(name);
+                    showClassModal.value = false;
+                    playBeep(700);
+                };
+
+                const createNewClass = async () => {
+                    const name = newClassNameInput.value.trim();
+                    if (!name) return;
+                    if (classList.value.includes(name)) {
+                        alert('已經有同名的班級了，請換一個名稱，或直接點選清單切換過去。');
+                        return;
+                    }
+                    currentClassName.value = name;
+                    groups.value = [
+                        { id: 1, name: '第一組', score: 0, color: '#4f46e5' },
+                        { id: 2, name: '第二組', score: 0, color: '#059669' },
+                        { id: 3, name: '第三組', score: 0, color: '#d97706' },
+                        { id: 4, name: '第四組', score: 0, color: '#dc2626' },
+                        { id: 5, name: '第五組', score: 0, color: '#0284c7' }
+                    ];
+                    logs.value = [];
+                    await saveToCloud();
+                    rememberClassLocally(name);
+                    await fetchClassList();
+                    newClassNameInput.value = '';
+                    showClassModal.value = false;
+                    playBeep(800);
+                };
+
+                const renameClass = async (oldName) => {
+                    const newName = (prompt('請輸入新的班級名稱：', oldName) || '').trim();
+                    if (!newName || newName === oldName) return;
+                    if (classList.value.includes(newName)) {
+                        alert('已經有同名的班級了，請換一個名稱。');
+                        return;
+                    }
+
+                    try {
+                        if (db && currentUser) {
+                            const oldRef = getDocRef(oldName);
+                            const newRef = getDocRef(newName);
+                            const snap = await getDoc(oldRef);
+                            const data = snap.exists() ? snap.data() : {
+                                groups: groups.value,
+                                customPresets: customPresets.value,
+                                logs: logs.value,
+                                teacherAccount: teacherAccount.value
+                            };
+                            await setDoc(newRef, { ...data, className: newName, updatedAt: new Date().toISOString() }, { merge: true });
+                            await deleteDoc(oldRef);
+                        } else {
+                            const uidKey = currentUser ? currentUser.uid : 'guest';
+                            const oldKey = `scoreboard_${uidKey}_${oldName}`;
+                            const newKey = `scoreboard_${uidKey}_${newName}`;
+                            const raw = localStorage.getItem(oldKey);
+                            if (raw) {
+                                localStorage.setItem(newKey, raw);
+                                localStorage.removeItem(oldKey);
+                            }
+                        }
+
+                        // 更新本機班級清單快取
+                        const uidKeyForList = currentUser ? currentUser.uid : 'guest';
+                        const listKey = `scoreboard_classlist_${uidKeyForList}`;
+                        try {
+                            const raw = localStorage.getItem(listKey);
+                            let list = raw ? JSON.parse(raw) : [];
+                            list = list.filter(n => n !== oldName);
+                            if (!list.includes(newName)) list.push(newName);
+                            localStorage.setItem(listKey, JSON.stringify(list));
+                        } catch (e) {}
+
+                        if (currentClassName.value === oldName) {
+                            currentClassName.value = newName;
+                            await listenToCloudClass(newName);
+                        }
+
+                        await fetchClassList();
+                        playBeep(800);
+                    } catch (err) {
+                        console.error('更改班級名稱失敗:', err);
+                        alert('更改班級名稱失敗，請稍後再試一次。');
+                    }
+                };
+
+                const deleteClass = async (name) => {
+                    if (classList.value.length <= 1) {
+                        alert('至少要保留一個班級，無法刪除最後一個班級。');
+                        return;
+                    }
+                    if (!confirm(`確定要刪除「${name}」嗎？裡面的小組、分數和紀錄都會被永久刪除，無法復原。`)) {
+                        return;
+                    }
+
+                    try {
+                        if (db && currentUser) {
+                            const docRef = getDocRef(name);
+                            if (docRef) await deleteDoc(docRef);
+                        } else {
+                            const uidKey = currentUser ? currentUser.uid : 'guest';
+                            localStorage.removeItem(`scoreboard_${uidKey}_${name}`);
+                        }
+
+                        // 從本機班級清單快取移除
+                        const uidKeyForList = currentUser ? currentUser.uid : 'guest';
+                        const listKey = `scoreboard_classlist_${uidKeyForList}`;
+                        try {
+                            const raw = localStorage.getItem(listKey);
+                            let list = raw ? JSON.parse(raw) : [];
+                            list = list.filter(n => n !== name);
+                            localStorage.setItem(listKey, JSON.stringify(list));
+                        } catch (e) {}
+
+                        // 如果刪的剛好是目前使用中的班級，自動切換到清單中剩下的另一個班級
+                        if (currentClassName.value === name) {
+                            const remaining = classList.value.filter(n => n !== name);
+                            const nextClass = remaining[0] || '三年一班';
+                            currentClassName.value = nextClass;
+                            await listenToCloudClass(nextClass);
+                        }
+
+                        await fetchClassList();
+                        playBeep(600);
+                    } catch (err) {
+                        console.error('刪除班級失敗:', err);
+                        alert('刪除班級失敗，請稍後再試一次。');
+                    }
+                };
+
+                // Save data to Firestore Database
+                // ===== 同步錯誤診斷 =====
+                const lastSyncError = ref('');
+                const withTimeout = (promise, ms = 10000) => Promise.race([
+                    promise,
+                    new Promise((_, reject) => setTimeout(() => reject({ code: 'timeout' }), ms))
+                ]);
+                const describeSyncError = (e) => {
+                    const code = (e && e.code) || '';
+                    if (code === 'timeout' || code === 'unavailable') return '連不上 Firestore 資料庫。請確認 Firebase 已建立 Firestore Database，並暫時關閉廣告攔截／隱私類擴充功能後按「重試」。';
+                    if (code === 'permission-denied') return 'Firestore 規則拒絕存取（測試模式可能已過期），請到 Firebase 主控台更新規則。';
+                    if (code === 'not-found') return '找不到 Firestore 資料庫，請到 Firebase 主控台建立 Firestore Database。';
+                    return `同步失敗（${code || (e && e.message) || '未知錯誤'}）`;
+                };
+                const reportSyncError = (e) => {
+                    console.error('Sync error:', e);
+                    lastSyncError.value = describeSyncError(e);
+                    syncStatus.value = 'error';
+                };
+
+                const saveToCloud = async () => {
+                    syncStatus.value = 'saving';
+                    try {
+                        const user = await ensureAuth();
+                        const docRef = getDocRef(currentClassName.value);
+
+                        const payload = {
+                            className: currentClassName.value,
+                            groups: groups.value,
+                            logs: logs.value,
+                            updatedAt: new Date().toISOString()
+                        };
+
+                        // 先寫本機備份，就算雲端暫時連不上也不會遺失
+                        try {
+                            const localKey = `scoreboard_${user ? user.uid : 'guest'}_${currentClassName.value}`;
+                            localStorage.setItem(localKey, JSON.stringify(payload));
+                        } catch (e) {}
+
+                        if (docRef) {
+                            await withTimeout(setDoc(docRef, payload, { merge: true }));
+                        }
+
+                        lastSyncError.value = '';
+                        syncStatus.value = 'synced';
+                    } catch (e) {
+                        reportSyncError(e);
+                    }
+                };
+
+                // ===== 雲端診斷 =====
+                const showDiagModal = ref(false);
+                const isDiagRunning = ref(false);
+                const diagResults = ref([]);
+                const consoleBase = `https://console.firebase.google.com/project/${firebaseConfig.projectId}`;
+                const diagLinks = {
+                    projectId: firebaseConfig.projectId,
+                    firestore: `${consoleBase}/firestore`,
+                    rules: `${consoleBase}/firestore/rules`,
+                    auth: `${consoleBase}/authentication/settings`
+                };
+
+                const runDiagnostics = async () => {
+                    isDiagRunning.value = true;
+                    diagResults.value = [];
+                    const add = (label, ok, detail) => diagResults.value.push({ label, ok, detail });
+                    try {
+                        add('目前網址網域', null, `${location.hostname}（需出現在「已授權網域」清單中）`);
+                        add('Firebase 專案', !!db, db ? firebaseConfig.projectId : '尚未設定或初始化失敗');
+                        if (!db || !auth) return;
+
+                        const u = auth.currentUser;
+                        add('登入狀態', !!u, u ? (u.isAnonymous ? '匿名訪客（尚未用 Google 登入）' : (u.email || 'Google 帳號')) : '沒有登入');
+                        if (!u) return;
+
+                        const testRef = doc(db, 'artifacts', appId, 'users', u.uid, 'settings', 'diagnostic');
+                        try {
+                            await withTimeout(setDoc(testRef, { ping: new Date().toISOString() }), 8000);
+                            add('Firestore 寫入測試', true, '成功，雲端有收到資料');
+                        } catch (e) {
+                            add('Firestore 寫入測試', false, `${describeSyncError(e)} [${(e && (e.code || e.message)) || ''}]`);
+                        }
+                        try {
+                            const sn = await withTimeout(getDoc(testRef), 8000);
+                            if (sn.metadata.fromCache) add('Firestore 讀取測試', false, '只讀到本機快取，沒有真正連到雲端伺服器');
+                            else add('Firestore 讀取測試', true, sn.exists() ? '成功，已從雲端讀回' : '連線成功，但讀不到剛寫入的資料');
+                        } catch (e) {
+                            add('Firestore 讀取測試', false, `${describeSyncError(e)} [${(e && (e.code || e.message)) || ''}]`);
+                        }
+                    } finally {
+                        isDiagRunning.value = false;
+                    }
+                };
+
+                const openDiag = () => {
+                    showDiagModal.value = true;
+                    runDiagnostics();
+                };
+
+                const retrySync = async () => {
+                    lastSyncError.value = '';
+                    syncStatus.value = 'saving';
+                    await loadAccountSettings(currentClassName.value);
+                    await listenToCloudClass(currentClassName.value);
+                    await saveToCloud();
+                };
+
+                // Real-time Cloud Snapshot Listener
+                const listenToCloudClass = async (className) => {
+                    if (unsubscribeDocListener) {
+                        unsubscribeDocListener();
+                        unsubscribeDocListener = null;
+                    }
+
+                    await ensureAuth();
+                    rememberClassLocally(className);
+
+                    // 尚未設定 Firebase：改讀這台裝置瀏覽器裡先前存的紀錄
+                    if (!db) {
+                        const localKey = `scoreboard_${currentUser ? currentUser.uid : 'guest'}_${className}`;
+                        const raw = localStorage.getItem(localKey);
+                        if (raw) {
+                            try {
+                                const data = JSON.parse(raw);
+                                isRemoteUpdating = true;
+                                if (data.groups) groups.value = data.groups;
+                                if (data.customPresets && !accountSettingsExist) customPresets.value = data.customPresets;
+                                if (data.logs) logs.value = data.logs;
+                                if (data.teacherAccount && !accountSettingsExist) teacherAccount.value = data.teacherAccount;
+                                setTimeout(() => { isRemoteUpdating = false; }, 300);
+                            } catch (e) {}
+                        }
+                        return;
+                    }
+
+                    const docRef = getDocRef(className);
+                    if (!docRef) return;
+
+                    unsubscribeDocListener = onSnapshot(docRef, (snapshot) => {
+                        if (snapshot.exists()) {
+                            const data = snapshot.data();
+                            isRemoteUpdating = true;
+                            if (data.groups) groups.value = data.groups;
+                            if (data.customPresets && !accountSettingsExist) customPresets.value = data.customPresets;
+                            if (data.logs) logs.value = data.logs;
+                            if (data.teacherAccount && !accountSettingsExist) teacherAccount.value = data.teacherAccount;
+                            setTimeout(() => { isRemoteUpdating = false; }, 300);
+                        }
+                    }, (error) => {
+                        reportSyncError(error);
+                    });
+                };
+
+                // ===== 帳號層級設定：快捷加分項目、音效、老師名稱、自訂計時 =====
+                // 存在 users/{uid}/settings/profile，跟著 Google 帳號走，換班級/換裝置都一樣。
+                const getSettingsRef = () => {
+                    if (!db || !currentUser) return null;
+                    return doc(db, 'artifacts', appId, 'users', currentUser.uid, 'settings', 'profile');
+                };
+                const settingsLocalKey = () => `scoreboard_settings_${currentUser ? currentUser.uid : 'guest'}`;
+
+                const applySettings = (st) => {
+                    isRemoteSettingsUpdating = true;
+                    if (Array.isArray(st.customPresets)) {
+                        // 舊名稱自動改成新名稱（已存在帳號裡的設定也會一起更新）
+                        const legacyNames = { '注釋(考)': '考試', '注釋(功課)': '功課' };
+                        customPresets.value = st.customPresets.map(p => ({ ...p, label: legacyNames[p.label] || p.label }));
+                    }
+                    if (Array.isArray(st.topPresets) && st.topPresets.length) topPresets.value = st.topPresets;
+                    if (typeof st.soundEnabled === 'boolean') soundEnabled.value = st.soundEnabled;
+                    if (st.teacherAccount) teacherAccount.value = st.teacherAccount;
+                    if (st.customTimerMinutes != null) customTimerMinutes.value = st.customTimerMinutes;
+                    if (st.customTimerSeconds != null) customTimerSeconds.value = st.customTimerSeconds;
+                    setTimeout(() => { isRemoteSettingsUpdating = false; }, 300);
+                };
+
+                const saveSettings = async () => {
+                    if (!settingsReady) return;
+                    const payload = JSON.parse(JSON.stringify({
+                        customPresets: customPresets.value,
+                        topPresets: topPresets.value,
+                        soundEnabled: soundEnabled.value,
+                        teacherAccount: teacherAccount.value,
+                        customTimerMinutes: Number(customTimerMinutes.value) || 0,
+                        customTimerSeconds: Number(customTimerSeconds.value) || 0,
+                        updatedAt: new Date().toISOString()
+                    }));
+                    try { localStorage.setItem(settingsLocalKey(), JSON.stringify(payload)); } catch (e) {}
+                    const sRef = getSettingsRef();
+                    if (sRef) {
+                        syncStatus.value = 'saving';
+                        try {
+                            await withTimeout(setDoc(sRef, payload, { merge: true }));
+                            lastSyncError.value = '';
+                            syncStatus.value = 'synced';
+                        } catch (e) {
+                            reportSyncError(e);
+                        }
+                    }
+                };
+
+                let settingsSaveTimeout = null;
+                const triggerSettingsSave = () => {
+                    if (settingsSaveTimeout) clearTimeout(settingsSaveTimeout);
+                    settingsSaveTimeout = setTimeout(saveSettings, 800);
+                };
+
+                const loadAccountSettings = async (className) => {
+                    if (unsubscribeSettingsListener) {
+                        unsubscribeSettingsListener();
+                        unsubscribeSettingsListener = null;
+                    }
+                    settingsReady = false;
+                    accountSettingsExist = false;
+
+                    const sRef = getSettingsRef();
+                    if (!sRef) {
+                        // 沒有設定 Firebase：用這台裝置的本機儲存
+                        try {
+                            const raw = localStorage.getItem(settingsLocalKey());
+                            if (raw) { applySettings(JSON.parse(raw)); accountSettingsExist = true; }
+                        } catch (e) {}
+                        settingsReady = true;
+                        return;
+                    }
+
+                    try {
+                        const snap = await withTimeout(getDoc(sRef));
+                        if (snap.exists()) {
+                            applySettings(snap.data());
+                        } else {
+                            // 第一次使用帳號設定：先把舊版存在班級文件裡的快捷項目/老師名稱搬過來
+                            try {
+                                const cRef = getDocRef(className);
+                                const cSnap = cRef ? await withTimeout(getDoc(cRef)) : null;
+                                if (cSnap && cSnap.exists()) {
+                                    const d = cSnap.data();
+                                    applySettings({ customPresets: d.customPresets, teacherAccount: d.teacherAccount });
+                                }
+                            } catch (e) {}
+                        }
+                        accountSettingsExist = true;
+                        settingsReady = true;
+                        if (!snap.exists()) await saveSettings();
+                    } catch (e) {
+                        // 讀取失敗時不開放寫入，避免用預設值蓋掉雲端上的設定
+                        reportSyncError(e);
+                        return;
+                    }
+
+                    // 其他裝置修改設定時即時同步過來
+                    unsubscribeSettingsListener = onSnapshot(sRef, (s) => {
+                        if (s.exists() && !s.metadata.hasPendingWrites) applySettings(s.data());
+                    }, (error) => reportSyncError(error));
+                };
+
+                // 套用「已登入的 Google 使用者」（按登入、或重新整理頁面後還原登入狀態時共用）
+                const applySignedInUser = async (user) => {
+                    settingsReady = false;
+                    currentUser = user;
+                    isLoggedIn.value = true;
+                    userDisplayName.value = user.displayName || '教師';
+                    userEmail.value = user.email || '';
+                    userPhoto.value = user.photoURL || '';
+                    userId.value = user.uid;
+                    teacherAccount.value = user.displayName || teacherAccount.value;
+                    usePrivateStorage.value = true;
+
+                    // 找出這個帳號最近使用過的班級
+                    let targetClass = currentClassName.value;
+                    try {
+                        const colRef = collection(db, 'artifacts', appId, 'users', user.uid, 'classes');
+                        const q = query(colRef, orderBy('updatedAt', 'desc'), limit(1));
+                        const snap = await withTimeout(getDocs(q), 8000);
+                        if (!snap.empty) targetClass = snap.docs[0].id;
+                    } catch (e) {
+                        console.warn('查詢最近使用班級失敗，改用目前顯示的班級:', e);
+                    }
+
+                    currentClassName.value = targetClass;
+                    await loadAccountSettings(targetClass);   // 先載入帳號設定，再載入班級資料
+                    await listenToCloudClass(targetClass);
+                    await fetchClassList();
+                };
+
+                const loginWithGoogle = async () => {
+                    if (!auth || !googleProvider) {
+                        alert('尚未設定 Firebase 專案，無法使用 Google 帳號登入。請參考程式碼開頭的註解完成免費設定。');
+                        return;
+                    }
+                    try {
+                        const result = await signInWithPopup(auth, googleProvider);
+                        await applySignedInUser(result.user);
+                        playBeep(800);
+                    } catch (err) {
+                        console.error('Google 登入失敗:', err);
+                        if (err && err.code !== 'auth/popup-closed-by-user') {
+                            alert('Google 登入失敗，請稍後再試一次。');
+                        }
+                    }
+                };
+
+                const logoutAccount = async () => {
+                    settingsReady = false;
+                    try {
+                        if (auth) await signOut(auth);
+                    } catch (e) {}
+                    currentUser = null;
+                    isLoggedIn.value = false;
+                    userDisplayName.value = '訪客老師';
+                    userEmail.value = '';
+                    userPhoto.value = '';
+
+                    // 清掉上一個帳號的自訂內容，避免被誤存到訪客空間
+                    isRemoteUpdating = true;
+                    isRemoteSettingsUpdating = true;
+                    groups.value = JSON.parse(JSON.stringify(DEFAULT_GROUPS));
+                    logs.value = [];
+                    customPresets.value = JSON.parse(JSON.stringify(DEFAULT_PRESETS));
+                    topPresets.value = JSON.parse(JSON.stringify(DEFAULT_TOP_PRESETS));
+                    teacherAccount.value = '王老師';
+                    soundEnabled.value = true;
+                    currentClassName.value = '三年一班';
+                    setTimeout(() => { isRemoteUpdating = false; isRemoteSettingsUpdating = false; }, 300);
+
+                    await ensureAuth();
+                    await loadAccountSettings(currentClassName.value);
+                    listenToCloudClass(currentClassName.value);
+                    fetchClassList();
+                };
+
+                const saveAccountSettings = () => {
+                    saveSettings();
+                    saveToCloud();
+                    showAccountModal.value = false;
+                    playBeep(800);
+                };
+
+                let autoSaveTimeout = null;
+                const triggerAutoSave = () => {
+                    if (isRemoteUpdating) return;
+                    syncStatus.value = 'saving';
+                    if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
+                    autoSaveTimeout = setTimeout(() => {
+                        saveToCloud();
+                    }, 800);
+                };
+
+                watch([groups, logs], () => {
+                    triggerAutoSave();
+                }, { deep: true });
+
+                // 快捷項目、音效、老師名稱、自訂計時：存到帳號層級設定
+                watch([customPresets, topPresets, soundEnabled, teacherAccount, customTimerMinutes, customTimerSeconds], () => {
+                    if (isRemoteSettingsUpdating || !settingsReady) return;
+                    triggerSettingsSave();
+                }, { deep: true });
+
+                // App Actions
+                const addGroup = () => {
+                    const nextId = groups.value.length ? Math.max(...groups.value.map(g => g.id)) + 1 : 1;
+                    const colorIndex = (groups.value.length) % defaultColors.length;
+                    groups.value.push({
+                        id: nextId,
+                        name: `第 ${groups.value.length + 1} 組`,
+                        score: 0,
+                        color: defaultColors[colorIndex]
+                    });
+                    playBeep(600);
+                };
+
+                const deleteGroup = (id) => {
+                    groups.value = groups.value.filter(g => g.id !== id);
+                };
+
+                const addPoints = (group, points, reason = '手動調整') => {
+                    group.score += points;
+                    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    logs.value.unshift({
+                        groupId: group.id,
+                        groupName: group.name,
+                        points,
+                        reason,
+                        time: timeStr
+                    });
+                    if (points > 0) playBeep(800);
+                    else playBeep(300, 'sawtooth');
+                };
+
+                const openCustomScoreModal = (group, defaultVal = 10, defaultReason = '') => {
+                    targetGroup.value = group;
+                    customScoreValue.value = defaultVal;
+                    customScoreReason.value = defaultReason;
+                    showCustomScoreModal.value = true;
+                };
+
+                const submitCustomScore = () => {
+                    if (targetGroup.value && customScoreValue.value !== null) {
+                        addPoints(targetGroup.value, customScoreValue.value, customScoreReason.value || '自訂項目');
+                    }
+                    showCustomScoreModal.value = false;
+                };
+
+                const openAddPresetModal = () => {
+                    editingPresetIdx.value = null;
+                    newPresetLabel.value = '';
+                    newPresetPoints.value = 1;
+                    showAddPresetModal.value = true;
+                };
+
+                const openEditPresetModal = (idx) => {
+                    const preset = customPresets.value[idx];
+                    if (!preset) return;
+                    editingPresetIdx.value = idx;
+                    newPresetLabel.value = preset.label;
+                    newPresetPoints.value = preset.points;
+                    showAddPresetModal.value = true;
+                };
+
+                const saveNewPreset = () => {
+                    if (!newPresetLabel.value.trim()) return;
+                    const item = {
+                        label: newPresetLabel.value.trim(),
+                        points: newPresetPoints.value || 0
+                    };
+                    if (editingPresetIdx.value === null) {
+                        customPresets.value.push(item);
+                    } else {
+                        customPresets.value[editingPresetIdx.value] = item;
+                    }
+                    editingPresetIdx.value = null;
+                    showAddPresetModal.value = false;
+                };
+
+                const deletePreset = (idx) => {
+                    customPresets.value.splice(idx, 1);
+                };
+
+                const applyPresetToTarget = (preset) => {
+                    selectedPresetForTarget.value = preset;
+                    showTargetSelectModal.value = true;
+                };
+
+                const confirmApplyPreset = (group) => {
+                    if (selectedPresetForTarget.value) {
+                        addPoints(group, selectedPresetForTarget.value.points, selectedPresetForTarget.value.label);
+                    }
+                    showTargetSelectModal.value = false;
+                };
+
+                const undoLog = (logItem, index) => {
+                    const group = groups.value.find(g => g.id === logItem.groupId);
+                    if (group) group.score -= logItem.points;
+                    logs.value.splice(index, 1);
+                };
+
+                const clearLogs = () => {
+                    logs.value = [];
+                };
+
+                const sortGroups = () => {
+                    groups.value.sort((a, b) => b.score - a.score);
+                    playBeep(700);
+                };
+
+                const confirmReset = () => {
+                    groups.value.forEach(g => g.score = 0);
+                    logs.value = [];
+                };
+
+                const triggerCelebration = () => {
+                    if (typeof confetti === 'function') {
+                        confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+                    }
+                    playBeep(900);
+                };
+
+                const toggleTimer = () => {
+                    if (isTimerRunning.value) {
+                        clearInterval(timerInterval);
+                        isTimerRunning.value = false;
+                    } else {
+                        isTimerRunning.value = true;
+                        timerInterval = setInterval(() => {
+                            if (timerSeconds.value > 0) {
+                                timerSeconds.value--;
+                            } else {
+                                clearInterval(timerInterval);
+                                isTimerRunning.value = false;
+                                triggerCelebration();
+                            }
+                        }, 1000);
+                    }
+                };
+
+                const resetTimer = () => {
+                    clearInterval(timerInterval);
+                    isTimerRunning.value = false;
+                    timerSeconds.value = 180;
+                };
+
+                const setTimerPreset = (secs) => {
+                    clearInterval(timerInterval);
+                    isTimerRunning.value = false;
+                    timerSeconds.value = secs;
+                };
+
+                const applyCustomTimer = () => {
+                    const mins = Math.max(0, Number(customTimerMinutes.value) || 0);
+                    const secs = Math.max(0, Math.min(59, Number(customTimerSeconds.value) || 0));
+                    const total = mins * 60 + secs;
+                    if (total <= 0) {
+                        alert('請輸入大於 0 的時間。');
+                        return;
+                    }
+                    clearInterval(timerInterval);
+                    isTimerRunning.value = false;
+                    timerSeconds.value = total;
+                    showCustomTimerInput.value = false;
+                };
+
+                // Lifecycle initialization
+                onMounted(async () => {
+                    // 重新整理頁面後，Firebase 會保留 Google 登入狀態：先等它還原，
+                    // 有登入就直接進入該帳號，不要被匿名登入蓋掉。
+                    try { if (auth && auth.authStateReady) await auth.authStateReady(); } catch (e) {}
+                    if (auth && auth.currentUser && !auth.currentUser.isAnonymous) {
+                        await applySignedInUser(auth.currentUser);
+                    } else {
+                        await ensureAuth();
+                        await loadAccountSettings(currentClassName.value);
+                        listenToCloudClass(currentClassName.value);
+                    }
+
+                    // 請瀏覽器把這個網站的資料標記為「持久」，降低被自動清除的機率
+                    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+
+                    // 使用者第一次點擊/觸碰頁面時先解鎖音效，這樣之後在 await 之後
+                    // 呼叫 playBeep（例如存檔完成時）才真的能發出聲音。
+                    const unlockAudio = () => {
+                        getAudioCtx();
+                        window.removeEventListener('pointerdown', unlockAudio);
+                        window.removeEventListener('keydown', unlockAudio);
+                    };
+                    window.addEventListener('pointerdown', unlockAudio, { once: true });
+                    window.addEventListener('keydown', unlockAudio, { once: true });
+                });
+
+                return {
+                    groups,
+                    customPresets,
+                    logs,
+                    soundEnabled,
+                    highestScore,
+                    getRank,
+                    showCustomScoreModal,
+                    targetGroup,
+                    customScoreValue,
+                    customScoreReason,
+                    showAddPresetModal,
+                    newPresetLabel,
+                    newPresetPoints,
+                    editingPresetIdx,
+                    topPresets,
+                    topPresetText,
+                    topPresetColor,
+                    showTopPresetModal,
+                    topPresetsDraft,
+                    openTopPresetModal,
+                    addTopPresetDraft,
+                    removeTopPresetDraft,
+                    resetTopPresetsDraft,
+                    saveTopPresets,
+                    openEditPresetModal,
+                    showTargetSelectModal,
+                    selectedPresetForTarget,
+                    showTimerModal,
+                    timerSeconds,
+                    showCustomTimerInput,
+                    customTimerMinutes,
+                    customTimerSeconds,
+                    applyCustomTimer,
+                    formattedTimerTime,
+                    isTimerRunning,
+                    currentClassName,
+                    showClassModal,
+                    classList,
+                    newClassNameInput,
+                    openClassModal,
+                    switchClass,
+                    createNewClass,
+                    renameClass,
+                    deleteClass,
+                    showAccountModal,
+                    teacherAccount,
+                    userId,
+                    usePrivateStorage,
+                    isLoggedIn,
+                    userDisplayName,
+                    userEmail,
+                    userPhoto,
+                    firebaseReady,
+                    loginWithGoogle,
+                    logoutAccount,
+                    syncStatusText,
+                    lastSyncError,
+                    retrySync,
+                    showDiagModal,
+                    isDiagRunning,
+                    diagResults,
+                    diagLinks,
+                    runDiagnostics,
+                    openDiag,
+                    syncStatusIcon,
+                    syncStatusClass,
+                    addGroup,
+                    deleteGroup,
+                    addPoints,
+                    openCustomScoreModal,
+                    submitCustomScore,
+                    openAddPresetModal,
+                    saveNewPreset,
+                    deletePreset,
+                    applyPresetToTarget,
+                    confirmApplyPreset,
+                    undoLog,
+                    clearLogs,
+                    sortGroups,
+                    confirmReset,
+                    triggerCelebration,
+                    toggleTimer,
+                    resetTimer,
+                    setTimerPreset,
+                    saveAccountSettings
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
